@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+data/
+.claude/
+.vscode/
+knowledge_base/
