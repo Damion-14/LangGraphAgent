@@ -1,8 +1,8 @@
 /**
- * Ink-based interactive chat UI
+ * Ink-based interactive chat UI with fixed viewport and scrolling
  */
-import React, { useState, useEffect } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { MemoryManager, MemoryStats } from '../memory/memoryManager.js';
 import { AgentStateType } from '../agent/state.js';
@@ -23,17 +23,85 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'system',
-      content: 'Welcome! Ask questions or share information about yourself. Type /help for commands.',
+      content: 'Welcome! Ask questions or share information. Type /help for commands.',
     },
   ]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const { exit } = useApp();
+  const { stdout } = useStdout();
+
+  // Terminal dimensions with sensible defaults
+  const terminalHeight = stdout?.rows ?? 24;
+  const terminalWidth = stdout?.columns ?? 80;
+
+  // Reserve space for header (3), input (3), footer (2), padding (2)
+  const messageAreaHeight = Math.max(terminalHeight - 10, 5);
 
   useEffect(() => {
-    // Load initial stats
     setStats(memoryManager.getMemoryStats());
   }, [memoryManager]);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    setScrollOffset(0);
+  }, [messages.length]);
+
+  // Convert all messages to rendered lines for line-by-line scrolling
+  const allRenderedLines = useMemo(() => {
+    const lines: Array<{ messageIdx: number; line: string; role: Message['role'] }> = [];
+
+    messages.forEach((msg, idx) => {
+      const roleConfig = {
+        user: { prefix: 'You: ' },
+        agent: { prefix: 'AI: ' },
+        system: { prefix: '' },
+      };
+
+      const prefix = roleConfig[msg.role].prefix;
+      const prefixWidth = prefix.length;
+      const effectiveWidth = Math.max(terminalWidth - prefixWidth - 2, 20);
+
+      const contentLines = msg.content.split('\n');
+      let isFirstLine = true;
+
+      contentLines.forEach((line) => {
+        if (line.length === 0) {
+          lines.push({ messageIdx: idx, line: '', role: msg.role });
+          isFirstLine = false;
+        } else {
+          // Wrap long lines
+          for (let i = 0; i < line.length; i += effectiveWidth) {
+            const chunk = line.slice(i, i + effectiveWidth);
+            const displayLine = isFirstLine ? `${prefix}${chunk}` : `${' '.repeat(prefixWidth)}${chunk}`;
+            lines.push({ messageIdx: idx, line: displayLine, role: msg.role });
+            isFirstLine = false;
+          }
+        }
+      });
+
+      // Add spacing line between messages
+      lines.push({ messageIdx: idx, line: '', role: msg.role });
+    });
+
+    return lines;
+  }, [messages, terminalWidth]);
+
+  // Calculate total lines and visible slice
+  const totalLines = allRenderedLines.length;
+  const maxScrollOffset = Math.max(0, totalLines - messageAreaHeight);
+
+  // Clamp scroll offset
+  const clampedScrollOffset = Math.min(scrollOffset, maxScrollOffset);
+
+  // Get visible lines (scroll from bottom)
+  const startIdx = Math.max(0, totalLines - messageAreaHeight - clampedScrollOffset);
+  const endIdx = totalLines - clampedScrollOffset;
+  const visibleLines = allRenderedLines.slice(startIdx, endIdx);
+
+  const canScrollUp = clampedScrollOffset < maxScrollOffset;
+  const canScrollDown = clampedScrollOffset > 0;
 
   const handleSubmit = async (value: string) => {
     if (!value.trim() || isProcessing) return;
@@ -41,38 +109,32 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
     const userInput = value.trim();
     setInput('');
 
-    // Add user message
     setMessages((prev) => [...prev, { role: 'user', content: userInput, timestamp: new Date() }]);
 
-    // Handle commands
+    // Commands
     if (userInput.toLowerCase() === '/quit' || userInput.toLowerCase() === '/exit') {
       setMessages((prev) => [
         ...prev,
-        { role: 'system', content: '\nGoodbye! Final stats shown below.' },
+        { role: 'system', content: 'Goodbye!' },
       ]);
       const finalStats = memoryManager.getMemoryStats();
       setMessages((prev) => [
         ...prev,
         {
           role: 'system',
-          content: `Active: ${finalStats.activeMemories} | Archived: ${finalStats.archivedMemories} | Total: ${finalStats.totalMemories}`,
+          content: `Final: ${finalStats.activeMemories} active | ${finalStats.archivedMemories} archived`,
         },
       ]);
       setTimeout(() => exit(), 1000);
       return;
     }
 
-    if (userInput.toLowerCase() === '/help' || userInput.toLowerCase() === '/commands') {
+    if (userInput.toLowerCase() === '/help') {
       setMessages((prev) => [
         ...prev,
         {
           role: 'system',
-          content: `Commands:
-/help     - Show this help
-/stats    - Memory statistics
-/memories - Show all memories
-/clear    - Clear all memories
-/quit     - Exit`,
+          content: '/help /stats /memories /clear /quit · ↑↓ to scroll',
         },
       ]);
       return;
@@ -85,12 +147,7 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
         ...prev,
         {
           role: 'system',
-          content: `Memory Stats:
-  Active: ${currentStats.activeMemories}
-  Archived: ${currentStats.archivedMemories}
-  Total: ${currentStats.totalMemories}
-  Tokens: ${currentStats.activeContextTokens}
-  Utilization: ${(currentStats.contextUtilization * 100).toFixed(1)}%`,
+          content: `Stats: ${currentStats.activeMemories} active, ${currentStats.archivedMemories} archived, ${currentStats.activeContextTokens} tokens, ${(currentStats.contextUtilization * 100).toFixed(1)}% util`,
         },
       ]);
       return;
@@ -100,31 +157,25 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
       const activeMemories = memoryManager['store'].getActiveMemories();
       const archivedMemories = memoryManager['store'].getArchivedMemories();
 
-      let memoryText = `\n=== ACTIVE MEMORIES (${activeMemories.length}) ===\n`;
-      if (activeMemories.length > 0) {
-        activeMemories.forEach((m, i) => {
-          memoryText += `${i + 1}. [Score: ${m.importanceScore.toFixed(1)}] ${m.content}\n`;
-        });
-      } else {
-        memoryText += 'None\n';
-      }
+      const lines: string[] = [`Active (${activeMemories.length}):`];
+      activeMemories.slice(0, 5).forEach((m, i) => {
+        lines.push(`  ${i + 1}. [${m.importanceScore.toFixed(1)}] ${m.content.slice(0, 60)}...`);
+      });
+      if (activeMemories.length > 5) lines.push(`  ...and ${activeMemories.length - 5} more`);
 
-      memoryText += `\n=== ARCHIVED MEMORIES (${archivedMemories.length}) ===\n`;
-      if (archivedMemories.length > 0) {
-        archivedMemories.forEach((m, i) => {
-          memoryText += `${i + 1}. [Score: ${m.importanceScore.toFixed(1)}] ${m.content}\n`;
-        });
-      } else {
-        memoryText += 'None\n';
-      }
+      lines.push(`Archived (${archivedMemories.length}):`);
+      archivedMemories.slice(0, 3).forEach((m, i) => {
+        lines.push(`  ${i + 1}. [${m.importanceScore.toFixed(1)}] ${m.content.slice(0, 60)}...`);
+      });
+      if (archivedMemories.length > 3) lines.push(`  ...and ${archivedMemories.length - 3} more`);
 
-      setMessages((prev) => [...prev, { role: 'system', content: memoryText }]);
+      setMessages((prev) => [...prev, { role: 'system', content: lines.join('\n') }]);
       return;
     }
 
     if (userInput.toLowerCase() === '/clear') {
       memoryManager['store'].clearAllMemories();
-      setMessages((prev) => [...prev, { role: 'system', content: '✓ All memories cleared!' }]);
+      setMessages((prev) => [...prev, { role: 'system', content: '✓ Memories cleared' }]);
       setStats(memoryManager.getMemoryStats());
       return;
     }
@@ -146,93 +197,112 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
 
       const result = await agent.invoke(initialState);
 
-      // Add agent response
       setMessages((prev) => [
         ...prev,
         { role: 'agent', content: result.agentResponse, timestamp: new Date() },
       ]);
 
-      // Check if memory was stored (look for console output)
-      // Update stats
       setStats(memoryManager.getMemoryStats());
     } catch (error) {
       setMessages((prev) => [
         ...prev,
-        { role: 'system', content: `Error: ${error}. Please try again.` },
+        { role: 'system', content: `Error: ${error}` },
       ]);
     }
 
     setIsProcessing(false);
   };
 
-  useInput((_input, key) => {
+  useInput((input, key) => {
     if (key.escape) {
       exit();
+    }
+    // Scroll with arrow keys when not in input
+    if (key.upArrow && canScrollUp) {
+      setScrollOffset((prev) => prev + 1);
+    }
+    if (key.downArrow && canScrollDown) {
+      setScrollOffset((prev) => Math.max(0, prev - 1));
     }
   });
 
   return (
-    <Box flexDirection="column" padding={1}>
-      {/* Header */}
-      <Box borderStyle="double" borderColor="cyan" paddingX={2} paddingY={1} marginBottom={1}>
-        <Box flexDirection="column">
-          <Text bold color="cyan">
-            🤖 LangGraph RAG Agent with Memory
+    <Box flexDirection="column" height={terminalHeight - 1}>
+      {/* Header - compact */}
+      <Box
+        borderStyle="single"
+        borderColor="cyan"
+        paddingX={1}
+        justifyContent="space-between"
+      >
+        <Text bold color="cyan">
+          RAG Agent
+        </Text>
+        {stats && (
+          <Text dimColor>
+            {stats.activeMemories}↑ {stats.archivedMemories}↓ {stats.activeContextTokens}tok
           </Text>
-          {stats && (
-            <Text dimColor>
-              Memories: {stats.activeMemories} active · {stats.archivedMemories} archived · {stats.activeContextTokens} tokens
-            </Text>
-          )}
-        </Box>
+        )}
       </Box>
 
-      {/* Messages */}
-      <Box flexDirection="column" marginBottom={1} height={20} overflow="hidden">
-        {messages.slice(-10).map((msg, idx) => (
-          <Box key={idx} marginBottom={1}>
-            {msg.role === 'user' && (
-              <Text color="green" bold>
-                You: <Text color="white">{msg.content}</Text>
-              </Text>
-            )}
-            {msg.role === 'agent' && (
-              <Text color="blue" bold>
-                Agent: <Text color="white">{msg.content}</Text>
-              </Text>
-            )}
-            {msg.role === 'system' && (
-              <Text color="yellow" dimColor>
-                {msg.content}
-              </Text>
-            )}
+      {/* Scroll indicator */}
+      <Box justifyContent="center" height={1}>
+        {canScrollUp ? (<Text dimColor>↑ more messages ↑</Text>) : (<Text> </Text>)}
+      </Box>
+
+      {/* Messages - fixed height viewport */}
+      <Box flexDirection="column" height={messageAreaHeight} overflow="hidden">
+        {visibleLines.map((lineData, idx) => (
+          <Box key={`${lineData.messageIdx}-${idx}`} flexShrink={0}>
+            <LineRow line={lineData.line} role={lineData.role} />
           </Box>
         ))}
       </Box>
 
+      {/* Scroll indicator */}
+      <Box justifyContent="center" height={1}>
+        {canScrollDown ? (<Text dimColor>↓ newer messages ↓</Text>) : (<Text> </Text>)}
+      </Box>
+
+
       {/* Input */}
-      <Box borderStyle="round" borderColor="green" paddingX={1}>
+      <Box borderStyle="round" borderColor={isProcessing ? 'yellow' : 'green'} paddingX={1} height={3}>
         {isProcessing ? (
-          <Text color="yellow">⏳ Processing...</Text>
+          <Box flexDirection="row" justifyContent="center" alignItems="center">
+            <Text color="yellow">{'Thinking...'}</Text>
+          </Box>
         ) : (
-          <Box>
-            <Text color="green" bold>
-              You:{' '}
-            </Text>
+          <Box flexDirection="row">
+            <Text color="green" bold>{'> '}</Text>
             <TextInput
               value={input}
               onChange={setInput}
               onSubmit={handleSubmit}
-              placeholder="Type your message or /help for commands..."
+              placeholder="Message or /help"
             />
           </Box>
         )}
       </Box>
-
-      {/* Footer */}
-      <Box marginTop={1}>
-        <Text dimColor>Press ESC to exit</Text>
+      {/* Footer - minimal */}
+      <Box>
+        <Text dimColor>ESC exit · ↑↓ scroll</Text>
       </Box>
     </Box>
   );
 };
+
+// Separate component to render individual lines with proper coloring
+const LineRow: React.FC<{ line: string; role: Message['role'] }> = React.memo(({ line, role }) => {
+  const roleConfig = {
+    user: { color: 'green' as const },
+    agent: { color: 'blue' as const },
+    system: { color: 'yellow' as const },
+  };
+
+  const color = roleConfig[role].color;
+  const dimColor = role === 'system';
+
+  return <Text color={color} dimColor={dimColor}>{line}</Text>;
+});
+
+LineRow.displayName = 'LineRow';

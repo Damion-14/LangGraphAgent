@@ -2,12 +2,12 @@
   "name": "langgraph-rag-agent",
   "version": "1.0.0",
   "description": "LangGraph RAG Agent with Memory Management in TypeScript",
-  "main": "dist/demo.js",
+  "main": "dist/main.js",
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/demo.ts",
-    "start": "node dist/demo.js",
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js",
     "watch": "tsc --watch",
     "clean": "rimraf dist"
   },
