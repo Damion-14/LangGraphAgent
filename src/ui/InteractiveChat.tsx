@@ -6,6 +6,7 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { MemoryManager, MemoryStats } from '../memory/memoryManager.js';
 import { AgentStateType } from '../agent/state.js';
+import { VectorStore } from '../rag/index.js';
 
 interface Message {
   role: 'user' | 'agent' | 'system';
@@ -16,9 +17,21 @@ interface Message {
 interface InteractiveChatProps {
   agent: any;
   memoryManager: MemoryManager;
+  vectorStore: VectorStore;
 }
 
-export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryManager }) => {
+// Available commands with descriptions
+const COMMANDS = [
+  { name: '/help', description: 'Show available commands' },
+  { name: '/stats', description: 'Display memory statistics' },
+  { name: '/memories', description: 'List active and archived memories' },
+  { name: '/vectorstats', description: 'Show vector database statistics' },
+  { name: '/clear', description: 'Clear all memories' },
+  { name: '/quit', description: 'Exit the application' },
+  { name: '/exit', description: 'Exit the application' },
+];
+
+export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryManager, vectorStore }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -29,6 +42,7 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
   const [isProcessing, setIsProcessing] = useState(false);
   const [stats, setStats] = useState<MemoryStats | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -38,6 +52,23 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
 
   // Reserve space for header (3), input (3), footer (2), padding (2)
   const messageAreaHeight = Math.max(terminalHeight - 10, 5);
+
+  // Filter commands based on input
+  const filteredCommands = useMemo(() => {
+    if (!input.startsWith('/')) return [];
+
+    const query = input.toLowerCase();
+    return COMMANDS.filter(cmd =>
+      cmd.name.toLowerCase().startsWith(query)
+    );
+  }, [input]);
+
+  const showCommandMenu = filteredCommands.length > 0 && input.startsWith('/');
+
+  // Reset selected command index when filtered commands change
+  useEffect(() => {
+    setSelectedCommandIndex(0);
+  }, [filteredCommands.length, input]);
 
   useEffect(() => {
     setStats(memoryManager.getMemoryStats());
@@ -104,7 +135,7 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
   const canScrollDown = clampedScrollOffset > 0;
 
   const handleSubmit = async (value: string) => {
-    if (!value.trim() || isProcessing) return;
+    if (!value.trim() || isProcessing || value == '/') return;
 
     const userInput = value.trim();
     setInput('');
@@ -134,7 +165,7 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
         ...prev,
         {
           role: 'system',
-          content: '/help /stats /memories /clear /quit · ↑↓ to scroll',
+          content: '/help /stats /memories /vectorstats /clear /quit · ↑↓ to scroll',
         },
       ]);
       return;
@@ -168,6 +199,28 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
         lines.push(`  ${i + 1}. [${m.importanceScore.toFixed(1)}] ${m.content.slice(0, 60)}...`);
       });
       if (archivedMemories.length > 3) lines.push(`  ...and ${archivedMemories.length - 3} more`);
+
+      setMessages((prev) => [...prev, { role: 'system', content: lines.join('\n') }]);
+      return;
+    }
+
+    if (userInput.toLowerCase() === '/vectorstats') {
+      const stats = vectorStore.getStats();
+      const lines: string[] = [
+        `Vector Database Statistics:`,
+        `  Total chunks: ${stats.totalChunks}`,
+        `  Source files: ${stats.sourceFiles}`,
+        ``,
+        `Top files by chunks:`,
+      ];
+
+      stats.topFiles.forEach((file, i) => {
+        lines.push(`  ${i + 1}. ${file.name}: ${file.chunks} chunks`);
+      });
+
+      if (stats.sourceFiles > stats.topFiles.length) {
+        lines.push(`  ...and ${stats.sourceFiles - stats.topFiles.length} more files`);
+      }
 
       setMessages((prev) => [...prev, { role: 'system', content: lines.join('\n') }]);
       return;
@@ -213,16 +266,48 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
     setIsProcessing(false);
   };
 
-  useInput((input, key) => {
+  useInput((_input, key) => {
     if (key.escape) {
       exit();
     }
-    // Scroll with arrow keys when not in input
-    if (key.upArrow && canScrollUp) {
-      setScrollOffset((prev) => prev + 1);
-    }
-    if (key.downArrow && canScrollDown) {
-      setScrollOffset((prev) => Math.max(0, prev - 1));
+
+    // Handle command menu navigation
+    if (showCommandMenu) {
+      if (key.upArrow) {
+        setSelectedCommandIndex((prev) =>
+          prev > 0 ? prev - 1 : filteredCommands.length - 1
+        );
+        return;
+      }
+      if (key.downArrow) {
+        setSelectedCommandIndex((prev) =>
+          prev < filteredCommands.length - 1 ? prev + 1 : 0
+        );
+        return;
+      }
+      if (key.tab) {
+        // Autocomplete selected command
+        if (filteredCommands[selectedCommandIndex]) {
+          setInput(filteredCommands[selectedCommandIndex].name + ' ');
+        }
+        return;
+      }
+      if (key.return) {
+        setInput("");
+        // Submit selected command directly
+        if (filteredCommands[selectedCommandIndex]) {
+          handleSubmit(filteredCommands[selectedCommandIndex].name);
+        }
+        return;
+      }
+    } else {
+      // Scroll with arrow keys when command menu is not showing
+      if (key.upArrow && canScrollUp) {
+        setScrollOffset((prev) => prev + 1);
+      }
+      if (key.downArrow && canScrollDown) {
+        setScrollOffset((prev) => Math.max(0, prev - 1));
+      }
     }
   });
 
@@ -251,7 +336,7 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
       </Box>
 
       {/* Messages - fixed height viewport */}
-      <Box flexDirection="column" height={messageAreaHeight} overflow="hidden">
+      <Box flexDirection="column" height={messageAreaHeight - (showCommandMenu ? COMMANDS.length + 3 : 0)} overflow="hidden">
         {visibleLines.map((lineData, idx) => (
           <Box key={`${lineData.messageIdx}-${idx}`} flexShrink={0}>
             <LineRow line={lineData.line} role={lineData.role} />
@@ -264,6 +349,33 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
         {canScrollDown ? (<Text dimColor>↓ newer messages ↓</Text>) : (<Text> </Text>)}
       </Box>
 
+      {/* Command autocomplete menu */}
+      {showCommandMenu && (
+        <Box
+          borderStyle="round"
+          borderColor="magenta"
+          paddingX={1}
+          flexDirection="column"
+        >
+          <Text color="magenta" bold>Available Commands (↑↓ navigate, Tab/Enter select):</Text>
+          {filteredCommands.map((cmd, idx) => {
+            const isSelected = idx === selectedCommandIndex;
+            return (
+              <Box key={idx}>
+                <Text
+                  color={isSelected ? 'green' : 'cyan'}
+                  bold={isSelected}
+                  backgroundColor={isSelected ? 'gray' : undefined}
+                >
+                  {isSelected ? '▶ ' : '  '}
+                  {cmd.name}
+                </Text>
+                <Text dimColor> - {cmd.description}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
 
       {/* Input */}
       <Box borderStyle="round" borderColor={isProcessing ? 'yellow' : 'green'} paddingX={1} height={3}>
@@ -285,7 +397,7 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
       </Box>
       {/* Footer - minimal */}
       <Box>
-        <Text dimColor>ESC exit · ↑↓ scroll</Text>
+        <Text dimColor>ESC exit · ↑↓ scroll/navigate · Tab/Enter select</Text>
       </Box>
     </Box>
   );

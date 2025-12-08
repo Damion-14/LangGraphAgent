@@ -1,12 +1,9 @@
 /**
  * Main entry point for the LangGraph RAG Agent with Memory Management.
  */
-import * as fs from 'fs';
-import * as path from 'path';
 import React from 'react';
 import { render } from 'ink';
-import { DocumentLoader } from './rag/documentLoader.js';
-import { VectorStore } from './rag/vectorStore.js';
+import { VectorStoreManager } from './rag/index.js';
 import { MemoryStore } from './memory/memoryStore.js';
 import { MemoryManager } from './memory/memoryManager.js';
 import { createAgentGraph } from './agent/graph.js';
@@ -27,34 +24,26 @@ async function setupSystem() {
     return null;
   }
 
-  console.log('Step 1: Loading knowledge base...');
+  console.log('Step 1: Setting up vector store...');
   console.log('-'.repeat(60));
 
-  // Load documents
-  const docLoader = new DocumentLoader(config.CHUNK_SIZE, config.CHUNK_OVERLAP);
+  // Initialize vector store manager
+  const vectorStoreManager = new VectorStoreManager({
+    knowledgeBaseDir: config.KNOWLEDGE_BASE_DIR,
+    embeddingModel: config.EMBEDDING_MODEL,
+    chunkSize: config.CHUNK_SIZE,
+    chunkOverlap: config.CHUNK_OVERLAP,
+    vectorStorePath: config.VECTOR_STORE_PATH,
+    fileMetadataPath: config.FILE_METADATA_PATH,
+  });
 
   try {
-    const documents = await docLoader.loadDirectory(config.KNOWLEDGE_BASE_DIR);
-    if (documents.length === 0) {
-      console.log('Warning: No documents found in knowledge base!');
-      console.log(
-        `Please add .txt, .md, or .pdf files to: ${config.KNOWLEDGE_BASE_DIR}`
-      );
-    }
-
-    // Create vector store
-    console.log('\nStep 2: Creating vector store...');
-    console.log('-'.repeat(60));
-    const vectorStore = new VectorStore(config.EMBEDDING_MODEL);
-    await vectorStore.createFromDocuments(documents);
+    await vectorStoreManager.initialize();
+    const vectorStore = vectorStoreManager.getVectorStore();
 
     // Initialize memory system
-    console.log('\nStep 3: Initializing memory system...');
+    console.log('\nStep 2: Initializing memory system...');
     console.log('-'.repeat(60));
-    const dir = path.dirname(config.MEMORY_DB_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
     const memoryStore = new MemoryStore(config.MEMORY_DB_PATH);
     const memoryManager = new MemoryManager(
       memoryStore,
@@ -67,7 +56,7 @@ async function setupSystem() {
     console.log('Memory system initialized');
 
     // Create agent graph
-    console.log('\nStep 4: Building agent graph...');
+    console.log('\nStep 3: Building agent graph...');
     console.log('-'.repeat(60));
     const agent = createAgentGraph(memoryManager, vectorStore, config.LLM_MODEL);
     console.log('Agent graph compiled successfully');
@@ -75,18 +64,18 @@ async function setupSystem() {
     console.log('\n' + '='.repeat(60));
     console.log('System ready!');
     console.log('='.repeat(60));
-    console.log();
+    console.log('\n'.repeat(100));
 
-    return { agent, memoryManager };
+    return { agent, memoryManager, vectorStore };
   } catch (error) {
     console.log(`Error loading documents: ${error}`);
     return null;
   }
 }
 
-async function runInteractive(agent: any, memoryManager: MemoryManager): Promise<void> {
+async function runInteractive(agent: any, memoryManager: MemoryManager, vectorStore: any): Promise<void> {
   console.clear();
-  render(React.createElement(InteractiveChat, { agent, memoryManager }));
+  render(React.createElement(InteractiveChat, { agent, memoryManager, vectorStore }));
 }
 
 async function main() {
@@ -95,8 +84,8 @@ async function main() {
     return;
   }
 
-  const { agent, memoryManager } = result;
-  await runInteractive(agent, memoryManager);
+  const { agent, memoryManager, vectorStore } = result;
+  await runInteractive(agent, memoryManager, vectorStore);
 }
 
 main().catch(console.error);

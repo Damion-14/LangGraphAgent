@@ -17,6 +17,8 @@ export const KNOWLEDGE_BASE_DIR = "./knowledge_base";
 export const CHUNK_SIZE = 1000;
 export const CHUNK_OVERLAP = 200;
 export const TOP_K_DOCUMENTS = 3;
+export const VECTOR_STORE_PATH = "./data/vector_documents.json";
+export const FILE_METADATA_PATH = "./data/file_metadata.json";
 
 // Memory Configuration
 export const MAX_ACTIVE_MEMORIES = 10; // Maximum memories in active context
