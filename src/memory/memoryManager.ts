@@ -42,7 +42,7 @@ export class MemoryManager {
     this.importanceThreshold = importanceThreshold;
     this.maxContextLength = maxContextLength;
     this.consolidationTrigger = consolidationTrigger;
-    this.llm = new ChatOpenAI({ modelName: llmModel, temperature: 0 });
+    this.llm = new ChatOpenAI({ modelName: llmModel });
     this.embeddings = new OpenAIEmbeddings({ modelName: 'text-embedding-3-small' });
     this.tokenizer = get_encoding('cl100k_base');
 

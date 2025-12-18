@@ -36,13 +36,14 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'system',
-      content: 'Welcome! Ask questions or share information. Type /help for commands.',
+      content: 'Welcome to the IT Helpdesk Ticket Triager! Describe your issue and I\'ll help create a support ticket. Type /help for commands.',
     },
   ]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [stats, setStats] = useState<MemoryStats | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [agentState, setAgentState] = useState<Partial<AgentStateType>>({});
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -228,7 +229,8 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
 
     if (userInput.toLowerCase() === '/clear') {
       memoryManager['store'].clearAllMemories();
-      setMessages((prev) => [...prev, { role: 'system', content: '✓ Memories cleared' }]);
+      setAgentState({}); // Reset agent state
+      setMessages((prev) => [...prev, { role: 'system', content: '✓ Memories and conversation state cleared' }]);
       setStats(memoryManager.getMemoryStats());
       return;
     }
@@ -237,18 +239,16 @@ export const InteractiveChat: React.FC<InteractiveChatProps> = ({ agent, memoryM
     setIsProcessing(true);
 
     try {
-      const initialState: Partial<AgentStateType> = {
+      // Use previous state and only update userQuery
+      const nextState: Partial<AgentStateType> = {
+        ...agentState,
         userQuery: userInput,
-        processedQuery: '',
-        activeMemories: [],
-        recalledMemories: [],
-        ragDocuments: [],
-        agentResponse: '',
-        memoryStats: {},
-        iterationCount: 0,
       };
 
-      const result = await agent.invoke(initialState);
+      const result = await agent.invoke(nextState);
+
+      // Store the result state for next invocation
+      setAgentState(result);
 
       setMessages((prev) => [
         ...prev,
